@@ -4,97 +4,165 @@ from PyQt5.QtGui import *
 from PyQt5.QtWebEngineWidgets import *
 from PyQt5.QtWidgets import *
 
+# Classe para cada aba do navegador
+class BrowserTab(QWebEngineView):
+    def __init__(self, parent=None):
+        super(BrowserTab, self).__init__(parent)
 
-# Motor de busca do Navegador
+        # Configurar para aceitar todos os tipos de vídeo e plugins
+        self.settings().setAttribute(QWebEngineSettings.FullScreenSupportEnabled, True)
+        self.settings().setAttribute(QWebEngineSettings.JavascriptEnabled, True)
+        self.settings().setAttribute(QWebEngineSettings.PluginsEnabled, True)
+        self.settings().setAttribute(QWebEngineSettings.LocalStorageEnabled, True)
+        self.settings().setAttribute(QWebEngineSettings.AutoLoadImages, True)
+        self.settings().setAttribute(QWebEngineSettings.AllowRunningInsecureContent, True)
+
+        # Aceitar arquivos de vídeo como .mp4 e outros
+        self.page().setFeaturePermission(self.url(), QWebEnginePage.MediaAudioVideoCapture, QWebEnginePage.PermissionGrantedByUser)
+
+# Classe principal do navegador
 class MainWindow(QMainWindow):
     def __init__(self):
         super(MainWindow, self).__init__()
-        self.browser = QWebEngineView()
-        self.browser.setUrl(QUrl('https://duckduckgo.com/'))
-        self.setCentralWidget(self.browser)
-        self.showMaximized()
 
-        navbar = QToolBar()
+        # Interface de Gerenciamento de Abas
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.tabBarDoubleClicked.connect(self.tab_open_doubleclick)
+        self.tabs.currentChanged.connect(self.current_tab_changed)
+        self.tabs.setTabsClosable(True)
+        self.tabs.tabCloseRequested.connect(self.close_current_tab)
+
+        # Adicionar widget de abas à janela principal
+        self.setCentralWidget(self.tabs)
+        self.statusBar = QStatusBar()
+        self.setStatusBar(self.statusBar)
+
+        # Barra de navegação
+        navbar = QToolBar("Navegação")
         self.addToolBar(navbar)
 
-        # botão para voltar o URL
-        back_btn = QAction('Voltar', self)
-        back_btn.triggered.connect(self.browser.back)
+        # Botão de voltar
+        back_btn = QAction(QIcon('images/voltar.png'), 'Voltar', self)
+        back_btn.triggered.connect(lambda: self.tabs.currentWidget().back())
         navbar.addAction(back_btn)
-        back_btn.setIcon(QIcon('./images/voltar.png'))
 
-        # botão para avançar o URL
-        forward_btn = QAction('Avançar', self)
-        forward_btn.triggered.connect(self.browser.forward)
+        # Botão de avançar
+        forward_btn = QAction(QIcon('images/avançar.png'), 'Avançar', self)
+        forward_btn.triggered.connect(lambda: self.tabs.currentWidget().forward())
         navbar.addAction(forward_btn)
-        forward_btn.setIcon(QIcon('./images/avançar.png'))
 
-        # botão para recarregar F5
-        reload_btn = QAction('Recarregar', self)
-        reload_btn.triggered.connect(self.browser.reload)
+        # Botão de recarregar
+        reload_btn = QAction(QIcon('images/f5.png'), 'Recarregar', self)
+        reload_btn.triggered.connect(lambda: self.tabs.currentWidget().reload())
         navbar.addAction(reload_btn)
-        reload_btn.setIcon(QIcon('./images/f5.png'))
 
-        # botão para ir para a home page
-        home_btn = QAction('Home', self)
+        # Botão de ir para a página inicial
+        home_btn = QAction(QIcon('images/home.png'), 'Home', self)
         home_btn.triggered.connect(self.navigate_home)
         navbar.addAction(home_btn)
-        home_btn.setIcon(QIcon('./images/home.png'))
 
-        # barra de endereço
+        # Campo de URL
         self.url_bar = QLineEdit()
         self.url_bar.returnPressed.connect(self.navigate_to_url)
         navbar.addWidget(self.url_bar)
-        self.browser.urlChanged.connect(self.update_url)
 
-    # link da página de início [Meu Portfólio]
-    def navigate_home(self):
-        self.browser.setUrl(QUrl('https://raphael-laurentino.netlify.app/index.html'))
+        # Botão verde para adicionar uma nova aba
+        new_tab_btn = QAction(QIcon('images/green_new_tab.png'), 'Nova Aba', self)
+        new_tab_btn.triggered.connect(lambda _: self.add_new_tab())
+        navbar.addAction(new_tab_btn)
 
+        # Histórico de Navegação
+        history_btn = QAction(QIcon('images/history.png'), 'Histórico', self)
+        history_btn.triggered.connect(self.show_history)
+        navbar.addAction(history_btn)
+
+        # Configurações da janela
+        self.setWindowTitle("Navegador Saturno")
+        self.showMaximized()
+
+        # Criar a primeira aba
+        self.add_new_tab(QUrl('https://duckduckgo.com/'), 'Home')
+        
+        # Método para adicionar uma nova aba ao navegador
+    def add_new_tab(self, qurl=None, label="Nova Aba"):
+        if qurl is None:
+            qurl = QUrl('https://duckduckgo.com/')
+
+        browser = BrowserTab()
+        browser.setUrl(qurl)
+
+        index = self.tabs.addTab(browser, label)
+        self.tabs.setCurrentIndex(index)
+
+        browser.urlChanged.connect(lambda qurl, browser=browser: self.update_urlbar(qurl, browser))
+        browser.loadFinished.connect(lambda _, i=index, browser=browser: self.tabs.setTabText(i, browser.page().title()))
+
+    # Abrir uma nova aba ao clicar duas vezes
+    def tab_open_doubleclick(self, i):
+        if i == -1:
+            self.add_new_tab()
+
+    # Fechar a aba atual e criar uma nova aba em branco se for a última
+    def close_current_tab(self, i):
+        if self.tabs.count() < 2:
+            self.add_new_tab(QUrl('https://duckduckgo.com/'), 'Nova Aba')
+        self.tabs.removeTab(i)
+
+    # Atualizar a URL quando a aba atual muda
+    def current_tab_changed(self, i):
+        qurl = self.tabs.currentWidget().url()
+        self.update_urlbar(qurl, self.tabs.currentWidget())
+        self.update_title(self.tabs.currentWidget())
+
+    # Atualizar o título da aba
+    def update_title(self, browser):
+        if browser != self.tabs.currentWidget():
+            return
+
+        title = self.tabs.currentWidget().page().title()
+        self.setWindowTitle(f"{title} - Navegador Saturno")
+
+    # Atualizar a barra de URL quando a página mudar
+    def update_urlbar(self, qurl, browser=None):
+        if browser != self.tabs.currentWidget():
+            return
+
+        self.url_bar.setText(qurl.toString())
+        self.url_bar.setCursorPosition(0)
+
+    # Navegar para a URL especificada
     def navigate_to_url(self):
-        url = self.url_bar.text()
-        self.browser.setUrl(QUrl(url))
+        qurl = QUrl(self.url_bar.text())
+        if self.tabs.currentWidget():
+            self.tabs.currentWidget().setUrl(qurl)
 
-    def update_url(self, q):
-        self.url_bar.setText(q.toString())
+    # Navegar para a página inicial
+    def navigate_home(self):
+        self.tabs.currentWidget().setUrl(QUrl('https://raphael-laurentino.netlify.app/index.html'))
 
+    # Exibir Histórico de Navegação
+    def show_history(self):
+        history_window = QDialog(self)
+        history_window.setWindowTitle("Histórico de Navegação")
+        history_layout = QVBoxLayout()
 
+        for i in range(self.tabs.count()):
+            history = self.tabs.widget(i).history()
+            for entry in history.items():
+                history_layout.addWidget(QLabel(entry.url().toString()))
+
+        history_window.setLayout(history_layout)
+        history_window.exec_()
+
+# Executar a aplicação
 app = QApplication(sys.argv)
-QApplication.setApplicationName('Via Expressa Browser')
+QApplication.setApplicationName('Navegador Saturno')
+
+# Definindo o ícone da aplicação
+app.setWindowIcon(QIcon('images/icone.png'))
+
 window = MainWindow()
+window.setWindowIcon(QIcon('images/icone.png'))  # Define o ícone da janela principal
 app.exec_()
 
-# application = QApplication([])
-# mainWindow = QMainWindow()
-# mainWindow.setGeometry('0, 0, 1600, 900')
-# mainWindow.setMinimumHeight(900)
-# mainWindow.setMaximumHeight(900)
-# mainWindow.setMinimumWidth(1600)
-# mainWindow.setMaximumWidth(1600)
-# mainWindow.setStyleSheet("background-color: rgb(0, 0, 0);")
-
-
-# web = QWebEngineView(mainWindow)
-# web.setGeometry('0, 0, 1600, 900')
-# mainWindow.setStyleSheet("background-color: rgb(255, 255, 255);")
-
-# home_button = QToolButton(mainWindow)
-# home_button.setGeometry('0, 80, 30, 30')
-# home_button_icon = QIcon()
-# home_button.icon.addPixmap(QPixmap('home.png'), QIcon.Normal, QIcon.Off)
-# home_button.setIcon(home_button_icon)
-
-# mainWindow.setWindowTitle('Sactun Browser')
-
-# mainWindow.show()
-# application.exec_()
-
-# app = QApplication(sys.argv)
-# QApplication.setApplicationName('Sactun Browser')
-# window = MainWindow()
-# app.exec_()
-
-
-
-
-# versão Browser Sacturno V0.0.0.1 Alpha
