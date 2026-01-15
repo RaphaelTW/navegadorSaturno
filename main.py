@@ -1,168 +1,266 @@
 import sys
+import os
+import json
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
-from PyQt5.QtWebEngineWidgets import *
 from PyQt5.QtWidgets import *
+from PyQt5.QtWebEngineWidgets import *
 
-# Classe para cada aba do navegador
+HISTORY_FILE = "history.json"
+BOOKMARKS_FILE = "bookmarks.json"
+ASSETS_DIR = os.path.join(os.path.dirname(__file__), "images")
+
+# =========================
+# Utilidades
+# =========================
+def load_json(file, default):
+    if os.path.exists(file):
+        try:
+            with open(file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            # arquivo corrompido ou inválido — reescreve com default
+            save_json(file, default)
+            return default
+    return default
+
+def save_json(file, data):
+    with open(file, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+
+def get_asset_path(name: str) -> str:
+    return os.path.join(ASSETS_DIR, name)
+
+
+def get_icon(name: str) -> QIcon:
+    path = get_asset_path(name)
+    if os.path.exists(path):
+        return QIcon(path)
+    return QIcon()
+
+# =========================
+# Aba do Navegador
+# =========================
 class BrowserTab(QWebEngineView):
-    def __init__(self, parent=None):
-        super(BrowserTab, self).__init__(parent)
+    def __init__(self, incognito=False):
+        super().__init__()
 
-        # Configurar para aceitar todos os tipos de vídeo e plugins
-        self.settings().setAttribute(QWebEngineSettings.FullScreenSupportEnabled, True)
+        if incognito:
+            profile = QWebEngineProfile()
+            profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+            self.setPage(QWebEnginePage(profile, self))
+        # layout mínimo para performance
         self.settings().setAttribute(QWebEngineSettings.JavascriptEnabled, True)
-        self.settings().setAttribute(QWebEngineSettings.PluginsEnabled, True)
-        self.settings().setAttribute(QWebEngineSettings.LocalStorageEnabled, True)
-        self.settings().setAttribute(QWebEngineSettings.AutoLoadImages, True)
-        self.settings().setAttribute(QWebEngineSettings.AllowRunningInsecureContent, True)
 
-        # Aceitar arquivos de vídeo como .mp4 e outros
-        self.page().setFeaturePermission(self.url(), QWebEnginePage.MediaAudioVideoCapture, QWebEnginePage.PermissionGrantedByUser)
-
-# Classe principal do navegador
+# =========================
+# Janela Principal
+# =========================
 class MainWindow(QMainWindow):
     def __init__(self):
-        super(MainWindow, self).__init__()
+        super().__init__()
 
-        # Interface de Gerenciamento de Abas
+        self.history = load_json(HISTORY_FILE, [])
+        self.bookmarks = load_json(BOOKMARKS_FILE, [])
+
+        # normalizar bookmarks antigos que só tinham URL
+        for b in list(self.bookmarks):
+            if isinstance(b, str):
+                b_index = self.bookmarks.index(b)
+                self.bookmarks[b_index] = {"url": b, "title": b}
+            elif isinstance(b, dict) and "title" not in b:
+                b.setdefault("title", b.get("url", ""))
+
         self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        self.tabs.tabBarDoubleClicked.connect(self.tab_open_doubleclick)
-        self.tabs.currentChanged.connect(self.current_tab_changed)
         self.tabs.setTabsClosable(True)
-        self.tabs.tabCloseRequested.connect(self.close_current_tab)
-
-        # Adicionar widget de abas à janela principal
+        self.tabs.tabCloseRequested.connect(self.close_tab)
+        self.tabs.currentChanged.connect(self.current_tab_changed)
         self.setCentralWidget(self.tabs)
-        self.statusBar = QStatusBar()
-        self.setStatusBar(self.statusBar)
 
-        # Barra de navegação
-        navbar = QToolBar("Navegação")
-        self.addToolBar(navbar)
-
-        # Botão de voltar
-        back_btn = QAction(QIcon('images/voltar.png'), 'Voltar', self)
-        back_btn.triggered.connect(lambda: self.tabs.currentWidget().back())
-        navbar.addAction(back_btn)
-
-        # Botão de avançar
-        forward_btn = QAction(QIcon('images/avançar.png'), 'Avançar', self)
-        forward_btn.triggered.connect(lambda: self.tabs.currentWidget().forward())
-        navbar.addAction(forward_btn)
-
-        # Botão de recarregar
-        reload_btn = QAction(QIcon('images/f5.png'), 'Recarregar', self)
-        reload_btn.triggered.connect(lambda: self.tabs.currentWidget().reload())
-        navbar.addAction(reload_btn)
-
-        # Botão de ir para a página inicial
-        home_btn = QAction(QIcon('images/home.png'), 'Home', self)
-        home_btn.triggered.connect(self.navigate_home)
-        navbar.addAction(home_btn)
-
-        # Campo de URL
-        self.url_bar = QLineEdit()
-        self.url_bar.returnPressed.connect(self.navigate_to_url)
-        navbar.addWidget(self.url_bar)
-
-        # Botão verde para adicionar uma nova aba
-        new_tab_btn = QAction(QIcon('images/green_new_tab.png'), 'Nova Aba', self)
-        new_tab_btn.triggered.connect(lambda _: self.add_new_tab())
-        navbar.addAction(new_tab_btn)
-
-        # Histórico de Navegação
-        history_btn = QAction(QIcon('images/history.png'), 'Histórico', self)
-        history_btn.triggered.connect(self.show_history)
-        navbar.addAction(history_btn)
-
-        # Configurações da janela
         self.setWindowTitle("Navegador Saturno")
+        self.setWindowIcon(get_icon("icone.png"))
         self.showMaximized()
 
-        # Criar a primeira aba
-        self.add_new_tab(QUrl('https://duckduckgo.com/'), 'Home')
-        
-        # Método para adicionar uma nova aba ao navegador
-    def add_new_tab(self, qurl=None, label="Nova Aba"):
-        if qurl is None:
-            qurl = QUrl('https://duckduckgo.com/')
+        self.init_navbar()
+        self.apply_dark_theme()
 
-        browser = BrowserTab()
+        self.add_new_tab(QUrl("https://duckduckgo.com"), "Home")
+
+    # =========================
+    # Navbar
+    # =========================
+    def init_navbar(self):
+        navbar = QToolBar()
+        self.addToolBar(navbar)
+        navbar.setIconSize(QSize(20, 20))
+
+        back = QAction(get_icon("voltar.png"), "Voltar", self)
+        back.triggered.connect(lambda: self.safe_call_current("back"))
+        navbar.addAction(back)
+
+        forward = QAction(get_icon("avançar.png"), "Avançar", self)
+        forward.triggered.connect(lambda: self.safe_call_current("forward"))
+        navbar.addAction(forward)
+
+        reload = QAction(get_icon("f5.png"), "Recarregar", self)
+        reload.triggered.connect(lambda: self.safe_call_current("reload"))
+        navbar.addAction(reload)
+
+        self.https_icon = QLabel()
+        self.https_icon.setFixedWidth(20)
+        navbar.addWidget(self.https_icon)
+
+        self.url_bar = QLineEdit()
+        self.url_bar.setPlaceholderText("Pesquisar ou digitar endereço — Enter para ir")
+        self.url_bar.returnPressed.connect(self.navigate)
+        self.url_bar.setMinimumWidth(350)
+        navbar.addWidget(self.url_bar)
+
+        # Completer com títulos e urls
+        completer_list = []
+        for b in self.bookmarks:
+            if isinstance(b, dict):
+                completer_list.append(b.get("title", b.get("url")))
+                completer_list.append(b.get("url"))
+            else:
+                completer_list.append(b)
+        completer = QCompleter(list(dict.fromkeys(completer_list)))
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self.url_bar.setCompleter(completer)
+
+        new_tab = QAction(get_icon("home.png"), "Nova Aba", self)
+        new_tab.triggered.connect(self.add_new_tab)
+        navbar.addAction(new_tab)
+
+        bookmark = QAction(get_icon("icone.png"), "Adicionar Favorito", self)
+        bookmark.triggered.connect(self.add_bookmark)
+        navbar.addAction(bookmark)
+
+        incognito = QAction(get_icon("pesquisa.png"), "Incógnito", self)
+        incognito.triggered.connect(self.open_incognito)
+        navbar.addAction(incognito)
+
+    def safe_call_current(self, method: str):
+        try:
+            browser = self.tabs.currentWidget()
+            if not browser:
+                return
+            getattr(browser, method)()
+        except Exception:
+            pass
+
+    # =========================
+    # Abas
+    # =========================
+    def add_new_tab(self, qurl=None, title="Nova Aba", incognito=False):
+        browser = BrowserTab(incognito)
+        qurl = qurl or QUrl("https://duckduckgo.com")
         browser.setUrl(qurl)
 
-        index = self.tabs.addTab(browser, label)
+        index = self.tabs.addTab(browser, title)
         self.tabs.setCurrentIndex(index)
 
-        browser.urlChanged.connect(lambda qurl, browser=browser: self.update_urlbar(qurl, browser))
-        browser.loadFinished.connect(lambda _, i=index, browser=browser: self.tabs.setTabText(i, browser.page().title()))
+        browser.urlChanged.connect(lambda qurl: self.update_urlbar(qurl, browser))
+        browser.loadFinished.connect(lambda _: self.update_title(browser))
+        browser.urlChanged.connect(self.save_history)
+        # define ícone padrão da aba
+        self.tabs.setTabIcon(index, get_icon("home.png"))
 
-    # Abrir uma nova aba ao clicar duas vezes
-    def tab_open_doubleclick(self, i):
-        if i == -1:
-            self.add_new_tab()
+    def close_tab(self, index):
+        if self.tabs.count() > 1:
+            self.tabs.removeTab(index)
 
-    # Fechar a aba atual e criar uma nova aba em branco se for a última
-    def close_current_tab(self, i):
-        if self.tabs.count() < 2:
-            self.add_new_tab(QUrl('https://duckduckgo.com/'), 'Nova Aba')
-        self.tabs.removeTab(i)
+    def current_tab_changed(self, index):
+        browser = self.tabs.currentWidget()
+        if browser:
+            self.update_urlbar(browser.url(), browser)
 
-    # Atualizar a URL quando a aba atual muda
-    def current_tab_changed(self, i):
-        qurl = self.tabs.currentWidget().url()
-        self.update_urlbar(qurl, self.tabs.currentWidget())
-        self.update_title(self.tabs.currentWidget())
+    # =========================
+    # Navegação inteligente
+    # =========================
+    def parse_input(self, text):
+        if text.startswith(("http://", "https://")):
+            return QUrl(text)
 
-    # Atualizar o título da aba
+        if "." in text and " " not in text:
+            return QUrl("https://" + text)
+
+        query = QUrl.toPercentEncoding(text)
+        return QUrl(f"https://duckduckgo.com/?q={query.data().decode()}")
+
+    def navigate(self):
+        qurl = self.parse_input(self.url_bar.text())
+        self.tabs.currentWidget().setUrl(qurl)
+
+    # =========================
+    # UI Updates
+    # =========================
     def update_title(self, browser):
+        title = browser.page().title() or "Nova Aba"
+        self.setWindowTitle(title + " - Navegador Saturno")
+        self.tabs.setTabText(self.tabs.currentIndex(), title)
+
+    def update_urlbar(self, qurl, browser):
         if browser != self.tabs.currentWidget():
             return
 
-        title = self.tabs.currentWidget().page().title()
-        self.setWindowTitle(f"{title} - Navegador Saturno")
+        self.url_bar.setText(qurl.toString().replace("https://", "").replace("http://", ""))
+        # usa ícone simples para https quando disponível
+        if qurl.scheme() == "https":
+            pix = QPixmap(get_asset_path("icone.png"))
+            if not pix.isNull():
+                self.https_icon.setPixmap(pix.scaled(16, 16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            else:
+                self.https_icon.setText("🔒")
+        else:
+            self.https_icon.setText("⚠")
 
-    # Atualizar a barra de URL quando a página mudar
-    def update_urlbar(self, qurl, browser=None):
-        if browser != self.tabs.currentWidget():
-            return
+    # =========================
+    # Histórico
+    # =========================
+    def save_history(self, qurl):
+        url = qurl.toString()
+        # evita duplicatas e limita tamanho
+        if not self.history or self.history[-1] != url:
+            self.history.append(url)
+            if len(self.history) > 200:
+                self.history = self.history[-200:]
+            save_json(HISTORY_FILE, self.history)
 
-        self.url_bar.setText(qurl.toString())
-        self.url_bar.setCursorPosition(0)
+    # =========================
+    # Favoritos
+    # =========================
+    def add_bookmark(self):
+        browser = self.tabs.currentWidget()
+        url = browser.url().toString()
+        title = browser.page().title() or url
+        # evita duplicatas
+        for b in self.bookmarks:
+            if b.get("url") == url:
+                return
+        self.bookmarks.append({"url": url, "title": title})
+        save_json(BOOKMARKS_FILE, self.bookmarks)
 
-    # Navegar para a URL especificada
-    def navigate_to_url(self):
-        qurl = QUrl(self.url_bar.text())
-        if self.tabs.currentWidget():
-            self.tabs.currentWidget().setUrl(qurl)
+    # =========================
+    # Incógnito
+    # =========================
+    def open_incognito(self):
+        self.add_new_tab(incognito=True, title="Aba Anônima")
 
-    # Navegar para a página inicial
-    def navigate_home(self):
-        self.tabs.currentWidget().setUrl(QUrl('https://raphael-laurentino.netlify.app/index.html'))
+    # =========================
+    # Tema Escuro
+    # =========================
+    def apply_dark_theme(self):
+        self.setStyleSheet("""
+            QMainWindow { background: #121212; }
+            QLineEdit { background: #1e1e1e; color: white; padding: 6px; }
+            QToolBar { background: #1c1c1c; }
+        """)
 
-    # Exibir Histórico de Navegação
-    def show_history(self):
-        history_window = QDialog(self)
-        history_window.setWindowTitle("Histórico de Navegação")
-        history_layout = QVBoxLayout()
-
-        for i in range(self.tabs.count()):
-            history = self.tabs.widget(i).history()
-            for entry in history.items():
-                history_layout.addWidget(QLabel(entry.url().toString()))
-
-        history_window.setLayout(history_layout)
-        history_window.exec_()
-
-# Executar a aplicação
+# =========================
+# Execução
+# =========================
 app = QApplication(sys.argv)
-QApplication.setApplicationName('Navegador Saturno')
-
-# Definindo o ícone da aplicação
-app.setWindowIcon(QIcon('images/icone.png'))
-
+app.setApplicationName("Navegador Saturno")
 window = MainWindow()
-window.setWindowIcon(QIcon('images/icone.png'))  # Define o ícone da janela principal
-app.exec_()
-
+sys.exit(app.exec_())

@@ -39,6 +39,7 @@ pip install pafy
 pip install python-vlc
 pip install PyQt5
 pip install PyQtWebEngine
+python -m py_compile main.py
 4. Executar o Projeto
 Após a instalação das dependências, execute o arquivo principal:
 
